@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: quiz-live-app-backend
+    runtime: python
+    buildCommand: cd backend && poetry install --only=main
+    startCommand: cd backend && poetry run uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: quiz-live-app-db
+          property: connectionString
+      - key: OPENAI_API_KEY
+        sync: false
+    healthCheckPath: /healthz
+
+databases:
+  - name: quiz-live-app-db
+    databaseName: quiz_live_app
+    user: quiz_live_app_user
