@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Users, GraduationCap, Play } from 'lucide-react'
+import { PDFUpload } from './PDFUpload'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -188,41 +189,45 @@ export default function HomePage() {
           </TabsContent>
 
           <TabsContent value="teacher">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Users className="w-5 h-5" />
-                  Crea Nuova Sessione
-                </CardTitle>
-                <CardDescription>
-                  Avvia una nuova sessione di quiz per i tuoi corsisti
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <form onSubmit={handleTeacherCreate} className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-2">
-                      Titolo Sessione (opzionale)
-                    </label>
-                    <Input
-                      type="text"
-                      placeholder="Quiz di Informatica - Modulo 1"
-                      value={teacherForm.title}
-                      onChange={(e) => setTeacherForm({...teacherForm, title: e.target.value})}
-                    />
-                  </div>
+            <div className="space-y-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Users className="w-5 h-5" />
+                    Crea Nuova Sessione
+                  </CardTitle>
+                  <CardDescription>
+                    Avvia una nuova sessione di quiz per i tuoi corsisti
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <form onSubmit={handleTeacherCreate} className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium mb-2">
+                        Titolo Sessione (opzionale)
+                      </label>
+                      <Input
+                        type="text"
+                        placeholder="Quiz di Informatica - Modulo 1"
+                        value={teacherForm.title}
+                        onChange={(e) => setTeacherForm({...teacherForm, title: e.target.value})}
+                      />
+                    </div>
 
-                  <Button 
-                    type="submit" 
-                    className="w-full" 
-                    disabled={loading}
-                  >
-                    <Play className="w-4 h-4 mr-2" />
-                    {loading ? 'Creazione in corso...' : 'Crea Sessione'}
-                  </Button>
-                </form>
-              </CardContent>
-            </Card>
+                    <Button 
+                      type="submit" 
+                      className="w-full" 
+                      disabled={loading}
+                    >
+                      <Play className="w-4 h-4 mr-2" />
+                      {loading ? 'Creazione in corso...' : 'Crea Sessione'}
+                    </Button>
+                  </form>
+                </CardContent>
+              </Card>
+
+              <PDFUpload />
+            </div>
           </TabsContent>
         </Tabs>
       </div>

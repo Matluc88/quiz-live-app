@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -6,16 +6,24 @@ import random
 import string
 import uuid
 import asyncio
+import os
+import PyPDF2
+from openai import OpenAI
+import json
 
 from app.database import get_db, create_tables
 from app.models import LiveSession, Participant, LiveParticipant, ParticipantProgress, ServedQuestion, LiveAnswer
-from app.schemas import LiveSessionCreate, LiveSessionResponse, ParticipantCreate, ParticipantResponse, JoinSessionRequest, QuestionResponse, AnswerRequest, AnswerResponse, ParticipantStatus
+from app.schemas import LiveSessionCreate, LiveSessionResponse, ParticipantCreate, ParticipantResponse, JoinSessionRequest, QuestionResponse, AnswerRequest, AnswerResponse, ParticipantStatus, PDFUploadResponse
 from app.question_service import question_service
 from app.websocket_manager import manager
 
 app = FastAPI(title="Quiz Live API", version="1.0.0")
 
 create_tables()
+
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+os.makedirs("uploads", exist_ok=True)
 
 # Disable CORS. Do not remove this for full-stack development.
 app.add_middleware(
@@ -466,3 +474,102 @@ async def websocket_teacher(websocket: WebSocket, live_id: str):
             pass
     except WebSocketDisconnect:
         manager.disconnect_teacher(live_id)
+
+@app.post("/api/upload-pdf", response_model=PDFUploadResponse)
+async def upload_pdf(file: UploadFile = File(...)):
+    """Upload PDF and generate questions using OpenAI"""
+    if not file.filename.endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+    
+    if file.size > 10 * 1024 * 1024:  # 10MB limit
+        raise HTTPException(status_code=400, detail="File size too large (max 10MB)")
+    
+    try:
+        file_path = f"uploads/{file.filename}"
+        with open(file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+        
+        pdf_text = ""
+        with open(file_path, "rb") as pdf_file:
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            for page in pdf_reader.pages:
+                pdf_text += page.extract_text() + "\n"
+        
+        if not pdf_text.strip():
+            raise HTTPException(status_code=400, detail="Could not extract text from PDF")
+        
+        prompt = f"""
+Analizza il seguente testo e genera domande quiz in formato JSON. 
+Crea domande di diversi livelli di difficoltà (base, medio, avanzato) e identifica i topic principali.
+
+Formato richiesto per ogni domanda:
+{{
+    "topic": "nome del topic",
+    "level": "base|medio|avanzato", 
+    "difficulty": 1-3,
+    "question": "testo della domanda",
+    "options": ["A. opzione1", "B. opzione2", "C. opzione3", "D. opzione4"],
+    "answer_index": 0-3,
+    "explain_brief": "spiegazione breve",
+    "explain_detailed": "spiegazione dettagliata",
+    "source_refs": ["riferimento_al_documento"]
+}}
+
+Genera almeno 10 domande distribuite sui diversi livelli.
+
+Testo da analizzare:
+{pdf_text[:4000]}
+"""
+        
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Sei un esperto nella creazione di quiz educativi. Genera domande accurate e ben strutturate."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7
+        )
+        
+        questions_text = response.choices[0].message.content
+        
+        import re
+        json_match = re.search(r'\[.*\]', questions_text, re.DOTALL)
+        if json_match:
+            questions_json = json_match.group()
+            questions = json.loads(questions_json)
+        else:
+            questions = json.loads(questions_text)
+        
+        topics_added = set()
+        questions_added = 0
+        
+        for question in questions:
+            level = question.get('level', 'base')
+            topic = question.get('topic', 'Generale')
+            
+            if level not in question_service.questions_db:
+                question_service.questions_db[level] = {}
+            
+            if topic not in question_service.questions_db[level]:
+                question_service.questions_db[level][topic] = []
+            
+            question_service.questions_db[level][topic].append(question)
+            topics_added.add(topic)
+            questions_added += 1
+        
+        os.remove(file_path)
+        
+        return PDFUploadResponse(
+            filename=file.filename,
+            questions_generated=questions_added,
+            topics=list(topics_added),
+            message=f"Successfully generated {questions_added} questions from {file.filename}"
+        )
+        
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Error parsing OpenAI response")
+    except Exception as e:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")

@@ -72,3 +72,9 @@ class ParticipantStatus(BaseModel):
     total_served: int
     correct_percentage: float
     topic: Optional[str]
+
+class PDFUploadResponse(BaseModel):
+    filename: str
+    questions_generated: int
+    topics: List[str]
+    message: str
