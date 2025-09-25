@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -39,48 +39,7 @@ export default function QuizSession() {
   const [loading, setLoading] = useState(false)
   const [finished, setFinished] = useState(false)
 
-  useEffect(() => {
-    if (!code || !participantId) return
-
-    const wsUrl = `ws://localhost:8000/ws/participant/${code}/${participantId}`
-    const ws = new WebSocket(wsUrl)
-
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data)
-      
-      switch (data.type) {
-        case 'round.start':
-          setCurrentQuestion(data.question)
-          setTimeLeft(data.timer || 30)
-          setSelectedAnswer(null)
-          setShowResult(false)
-          setShowExplanation(false)
-          break
-        case 'live.end':
-          setFinished(true)
-          break
-      }
-    }
-
-    getNextQuestion()
-
-    return () => {
-      ws.close()
-    }
-  }, [code, participantId])
-
-  useEffect(() => {
-    if (timeLeft > 0 && currentQuestion && !showResult) {
-      const timer = setTimeout(() => {
-        setTimeLeft(timeLeft - 1)
-      }, 1000)
-      return () => clearTimeout(timer)
-    } else if (timeLeft === 0 && !showResult) {
-      handleSubmitAnswer()
-    }
-  }, [timeLeft, currentQuestion, showResult])
-
-  const getNextQuestion = async () => {
+  const getNextQuestion = useCallback(async () => {
     if (!code || !participantId) {
       console.log('Missing code or participantId:', { code, participantId })
       return
@@ -113,9 +72,9 @@ export default function QuizSession() {
     } catch (error) {
       console.error('Error getting next question:', error)
     }
-  }
+  }, [code, participantId])
 
-  const handleSubmitAnswer = async () => {
+  const handleSubmitAnswer = useCallback(async () => {
     if (!code || !participantId || selectedAnswer === null) return
 
     setLoading(true)
@@ -150,7 +109,48 @@ export default function QuizSession() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [code, participantId, selectedAnswer, timeLeft])
+
+  useEffect(() => {
+    if (!code || !participantId) return
+
+    const wsUrl = `ws://localhost:8000/ws/participant/${code}/${participantId}`
+    const ws = new WebSocket(wsUrl)
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data)
+      
+      switch (data.type) {
+        case 'round.start':
+          setCurrentQuestion(data.question)
+          setTimeLeft(data.timer || 30)
+          setSelectedAnswer(null)
+          setShowResult(false)
+          setShowExplanation(false)
+          break
+        case 'live.end':
+          setFinished(true)
+          break
+      }
+    }
+
+    getNextQuestion()
+
+    return () => {
+      ws.close()
+    }
+  }, [code, participantId, getNextQuestion])
+
+  useEffect(() => {
+    if (timeLeft > 0 && currentQuestion && !showResult) {
+      const timer = setTimeout(() => {
+        setTimeLeft(timeLeft - 1)
+      }, 1000)
+      return () => clearTimeout(timer)
+    } else if (timeLeft === 0 && !showResult) {
+      handleSubmitAnswer()
+    }
+  }, [timeLeft, currentQuestion, showResult, handleSubmitAnswer])
 
   const handleContinue = () => {
     if (lastResult?.next_action === 'finished') {

@@ -43,7 +43,7 @@ export default function HomePage() {
         const error = await response.json()
         alert(error.detail || 'Errore durante l\'accesso alla sessione')
       }
-    } catch (error) {
+    } catch {
       alert('Errore di connessione')
     } finally {
       setLoading(false)
@@ -69,7 +69,7 @@ export default function HomePage() {
       } else {
         alert('Errore durante la creazione della sessione')
       }
-    } catch (error) {
+    } catch {
       alert('Errore di connessione')
     } finally {
       setLoading(false)

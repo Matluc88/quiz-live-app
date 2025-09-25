@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -35,6 +35,34 @@ export default function TeacherDashboard() {
   const [connected, setConnected] = useState(false)
   const [loading, setLoading] = useState(false)
 
+  const loadSessionDetails = useCallback(async () => {
+    if (!liveId) return
+
+    try {
+      const response = await fetch(`${API_URL}/api/live/${liveId}/details`)
+      if (response.ok) {
+        const data = await response.json()
+        setSession(data)
+      }
+    } catch (error) {
+      console.error('Error loading session details:', error)
+    }
+  }, [liveId])
+
+  const loadParticipants = useCallback(async () => {
+    if (!liveId) return
+
+    try {
+      const response = await fetch(`${API_URL}/api/live/${liveId}/participants`)
+      if (response.ok) {
+        const data = await response.json()
+        setParticipants(data)
+      }
+    } catch (error) {
+      console.error('Error loading participants:', error)
+    }
+  }, [liveId])
+
   useEffect(() => {
     if (!liveId) return
 
@@ -65,35 +93,7 @@ export default function TeacherDashboard() {
     return () => {
       ws.close()
     }
-  }, [liveId])
-
-  const loadSessionDetails = async () => {
-    if (!liveId) return
-
-    try {
-      const response = await fetch(`${API_URL}/api/live/${liveId}/details`)
-      if (response.ok) {
-        const data = await response.json()
-        setSession(data)
-      }
-    } catch (error) {
-      console.error('Error loading session details:', error)
-    }
-  }
-
-  const loadParticipants = async () => {
-    if (!liveId) return
-
-    try {
-      const response = await fetch(`${API_URL}/api/live/${liveId}/participants`)
-      if (response.ok) {
-        const data = await response.json()
-        setParticipants(data)
-      }
-    } catch (error) {
-      console.error('Error loading participants:', error)
-    }
-  }
+  }, [liveId, loadSessionDetails, loadParticipants])
 
   const handleStartSession = async () => {
     if (!liveId) return
