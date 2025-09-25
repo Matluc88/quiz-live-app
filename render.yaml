@@ -13,14 +13,6 @@ services:
         sync: false
     healthCheckPath: /healthz
 
-  - type: static
-    name: quiz-live-app-frontend
-    buildCommand: cd frontend && pnpm install && pnpm run build
-    staticPublishPath: frontend/dist
-    envVars:
-      - key: VITE_API_URL
-        value: https://quiz-live-app-backend.onrender.com
-
 databases:
   - name: quiz-live-app-db
     databaseName: quiz_live_app
