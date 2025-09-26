@@ -74,7 +74,7 @@ export default function QuizSession() {
     }
   }, [code, participantId])
 
-  const handleSubmitAnswer = useCallback(async () => {
+  const handleSubmitAnswer = useCallback(async (retryCount = 0) => {
     if (!code || !participantId || selectedAnswer === null) return
 
     setLoading(true)
@@ -97,15 +97,28 @@ export default function QuizSession() {
         const result = await response.json()
         setLastResult(result)
         setShowResult(true)
+        console.log('Answer submitted successfully:', result)
 
         if (result.next_action === 'explanation_required') {
           setShowExplanation(true)
         } else if (result.next_action === 'finished') {
           setFinished(true)
         }
+      } else {
+        console.error('Answer submission failed:', response.status, await response.text())
+        if (retryCount < 2) {
+          console.log(`Retrying answer submission (attempt ${retryCount + 1}/3)`)
+          setTimeout(() => handleSubmitAnswer(retryCount + 1), 1000)
+          return
+        }
       }
     } catch (error) {
       console.error('Error submitting answer:', error)
+      if (retryCount < 2) {
+        console.log(`Retrying answer submission after error (attempt ${retryCount + 1}/3)`)
+        setTimeout(() => handleSubmitAnswer(retryCount + 1), 1000)
+        return
+      }
     } finally {
       setLoading(false)
     }
@@ -114,33 +127,99 @@ export default function QuizSession() {
   useEffect(() => {
     if (!code || !participantId) return
 
-    const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000'
-    const wsUrl = `${WS_URL}/ws/participant/${code}/${participantId}`
-    const ws = new WebSocket(wsUrl)
+    let ws: WebSocket | null = null
+    let reconnectTimeout: NodeJS.Timeout | null = null
+    let isComponentMounted = true
+    let reconnectAttempts = 0
 
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data)
+    const connect = () => {
+      if (!isComponentMounted) return
+
+      const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000'
+      const wsUrl = `${WS_URL}/ws/participant/${code}/${participantId}`
       
-      switch (data.type) {
-        case 'round.start':
-          setCurrentQuestion(data.question)
-          setTimeLeft(data.timer || 30)
-          setSelectedAnswer(null)
-          setShowResult(false)
-          setShowExplanation(false)
-          break
-        case 'live.end':
-          setFinished(true)
-          break
+      try {
+        ws = new WebSocket(wsUrl)
+
+        ws.onopen = () => {
+          if (!isComponentMounted) return
+          reconnectAttempts = 0
+          console.log(`Quiz WebSocket connected for participant ${participantId}`)
+        }
+
+        ws.onmessage = (event) => {
+          if (!isComponentMounted) return
+          
+          try {
+            const data = JSON.parse(event.data)
+            console.log(`Quiz received message:`, data.type)
+            
+            switch (data.type) {
+              case 'round.start':
+                setCurrentQuestion(data.question)
+                setTimeLeft(data.timer || 30)
+                setSelectedAnswer(null)
+                setShowResult(false)
+                setShowExplanation(false)
+                break
+              case 'live.end':
+                setFinished(true)
+                break
+            }
+          } catch (error) {
+            console.error('Error parsing Quiz WebSocket message:', error)
+          }
+        }
+
+        ws.onclose = (event) => {
+          if (!isComponentMounted) return
+          
+          console.log(`Quiz WebSocket closed for participant ${participantId}:`, event.code, event.reason)
+          
+          if (event.code !== 1000 && reconnectAttempts < 5) {
+            const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 10000)
+            console.log(`Quiz attempting to reconnect in ${delay}ms (attempt ${reconnectAttempts + 1}/5)`)
+            
+            reconnectTimeout = setTimeout(() => {
+              if (isComponentMounted) {
+                reconnectAttempts++
+                connect()
+              }
+            }, delay)
+          }
+        }
+
+        ws.onerror = (error) => {
+          console.error('Quiz WebSocket error:', error)
+        }
+
+      } catch (error) {
+        console.error('Error creating Quiz WebSocket:', error)
+        if (isComponentMounted && reconnectAttempts < 5) {
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 10000)
+          reconnectTimeout = setTimeout(() => {
+            if (isComponentMounted) {
+              reconnectAttempts++
+              connect()
+            }
+          }, delay)
+        }
       }
     }
 
+    connect()
     getNextQuestion()
 
     return () => {
-      ws.close()
+      isComponentMounted = false
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout)
+      }
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close(1000, 'Component unmounting')
+      }
     }
-  }, [code, participantId, getNextQuestion])
+  }, [code, participantId]) // Removed getNextQuestion from dependencies to prevent unnecessary reconnections
 
   useEffect(() => {
     if (timeLeft > 0 && currentQuestion && !showResult) {
@@ -362,7 +441,7 @@ export default function QuizSession() {
             ))}
 
             <Button
-              onClick={handleSubmitAnswer}
+              onClick={() => handleSubmitAnswer()}
               disabled={selectedAnswer === null || loading}
               className="w-full mt-6"
             >

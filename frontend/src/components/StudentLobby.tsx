@@ -20,43 +20,104 @@ export default function StudentLobby() {
   const [status, setStatus] = useState('lobby')
   const [countdown, setCountdown] = useState<number | null>(null)
   const [connected, setConnected] = useState(false)
+  const [reconnectAttempts, setReconnectAttempts] = useState(0)
 
   useEffect(() => {
     if (!participantId || !code) return
 
-    const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000'
-    const wsUrl = `${WS_URL}/ws/participant/${code}/${participantId}`
-    const ws = new WebSocket(wsUrl)
+    let ws: WebSocket | null = null
+    let reconnectTimeout: NodeJS.Timeout | null = null
+    let isComponentMounted = true
 
-    ws.onopen = () => {
-      setConnected(true)
-    }
+    const connect = () => {
+      if (!isComponentMounted) return
 
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data)
+      const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000'
+      const wsUrl = `${WS_URL}/ws/participant/${code}/${participantId}`
       
-      switch (data.type) {
-        case 'lobby.update':
-          setParticipants(data.participants)
-          break
-        case 'live.start':
-          setStatus('starting')
-          setCountdown(data.countdown)
-          break
-        case 'round.start':
-          navigate(`/quiz/${code}/${participantId}`)
-          break
+      try {
+        ws = new WebSocket(wsUrl)
+
+        ws.onopen = () => {
+          if (!isComponentMounted) return
+          setConnected(true)
+          setReconnectAttempts(0)
+          console.log(`Student WebSocket connected to session ${code}`)
+        }
+
+        ws.onmessage = (event) => {
+          if (!isComponentMounted) return
+          
+          try {
+            const data = JSON.parse(event.data)
+            console.log(`Student received message:`, data.type)
+            
+            switch (data.type) {
+              case 'lobby.update':
+                setParticipants(data.participants)
+                break
+              case 'live.start':
+                setStatus('starting')
+                setCountdown(data.countdown)
+                break
+              case 'round.start':
+                navigate(`/quiz/${code}/${participantId}`)
+                break
+            }
+          } catch (error) {
+            console.error('Error parsing WebSocket message:', error)
+          }
+        }
+
+        ws.onclose = (event) => {
+          if (!isComponentMounted) return
+          
+          setConnected(false)
+          console.log(`Student WebSocket closed for session ${code}:`, event.code, event.reason)
+          
+          if (event.code !== 1000 && reconnectAttempts < 5) {
+            const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 10000) // Exponential backoff, max 10s
+            console.log(`Attempting to reconnect in ${delay}ms (attempt ${reconnectAttempts + 1}/5)`)
+            
+            reconnectTimeout = setTimeout(() => {
+              if (isComponentMounted) {
+                setReconnectAttempts(prev => prev + 1)
+                connect()
+              }
+            }, delay)
+          }
+        }
+
+        ws.onerror = (error) => {
+          console.error('Student WebSocket error:', error)
+        }
+
+      } catch (error) {
+        console.error('Error creating WebSocket:', error)
+        if (isComponentMounted && reconnectAttempts < 5) {
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 10000)
+          reconnectTimeout = setTimeout(() => {
+            if (isComponentMounted) {
+              setReconnectAttempts(prev => prev + 1)
+              connect()
+            }
+          }, delay)
+        }
       }
     }
 
-    ws.onclose = () => {
-      setConnected(false)
-    }
+    connect()
 
     return () => {
-      ws.close()
+      isComponentMounted = false
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout)
+      }
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close(1000, 'Component unmounting')
+      }
     }
-  }, [participantId, code, navigate])
+  }, [participantId, code]) // Removed navigate from dependencies to prevent unnecessary reconnections
 
   useEffect(() => {
     if (countdown !== null && countdown > 0) {
