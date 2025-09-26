@@ -133,7 +133,14 @@ async def join_live_session(code: str, join_data: JoinSessionRequest, db: Sessio
         ]
     })
     
-    return participant
+    return ParticipantResponse(
+        participant_id=websocket_participant_id,
+        nome=participant.nome,
+        cognome=participant.cognome,
+        email=participant.email,
+        corso=participant.corso,
+        created_at=participant.created_at
+    )
 
 @app.post("/api/live/{live_id}/lock")
 async def lock_session(live_id: str, db: Session = Depends(get_db)):
