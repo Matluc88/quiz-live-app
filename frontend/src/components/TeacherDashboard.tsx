@@ -34,6 +34,7 @@ export default function TeacherDashboard() {
   const [participants, setParticipants] = useState<ParticipantStatus[]>([])
   const [connected, setConnected] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const loadSessionDetails = useCallback(async () => {
     if (!liveId) return
@@ -100,6 +101,7 @@ export default function TeacherDashboard() {
     if (!liveId) return
 
     setLoading(true)
+    setErrorMessage(null)
     try {
       const response = await fetch(`${API_URL}/api/live/${liveId}/start`, {
         method: 'POST',
@@ -107,9 +109,16 @@ export default function TeacherDashboard() {
 
       if (response.ok) {
         setSession(prev => prev ? { ...prev, status: 'running' } : null)
+        setErrorMessage(null)
+      } else if (response.status === 400) {
+        const errorData = await response.json()
+        setErrorMessage(errorData.detail || 'Cannot start session. Please upload a PDF file first to generate questions.')
+      } else {
+        setErrorMessage('Error starting session. Please try again.')
       }
     } catch (error) {
       console.error('Error starting session:', error)
+      setErrorMessage('Error starting session. Please make sure you have uploaded a PDF file first.')
     } finally {
       setLoading(false)
     }
@@ -233,6 +242,17 @@ export default function TeacherDashboard() {
               </span>
             </div>
           </div>
+
+          {/* Error Message */}
+          {errorMessage && (
+            <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+              <div className="flex items-center gap-2 text-red-800">
+                <div className="w-4 h-4 bg-red-500 rounded-full"></div>
+                <span className="font-medium">Error</span>
+              </div>
+              <p className="text-red-700 mt-1">{errorMessage}</p>
+            </div>
+          )}
 
           {/* Session Controls */}
           <div className="flex gap-2 flex-wrap">
