@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -24,7 +24,8 @@ export default function StudentLobby() {
   useEffect(() => {
     if (!participantId || !code) return
 
-    const wsUrl = `ws://localhost:8000/ws/participant/${code}/${participantId}`
+    const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000'
+    const wsUrl = `${WS_URL}/ws/participant/${code}/${participantId}`
     const ws = new WebSocket(wsUrl)
 
     ws.onopen = () => {
