@@ -107,9 +107,15 @@ export default function TeacherDashboard() {
 
       if (response.ok) {
         setSession(prev => prev ? { ...prev, status: 'running' } : null)
+      } else if (response.status === 400) {
+        const errorData = await response.json()
+        alert(errorData.detail || 'Cannot start session. Please upload a PDF file first to generate questions.')
+      } else {
+        alert('Error starting session. Please try again.')
       }
     } catch (error) {
       console.error('Error starting session:', error)
+      alert('Error starting session. Please make sure you have uploaded a PDF file first.')
     } finally {
       setLoading(false)
     }
