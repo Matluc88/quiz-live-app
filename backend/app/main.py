@@ -495,8 +495,8 @@ async def upload_pdf(file: UploadFile = File(...)):
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
     
-    if file.size > 10 * 1024 * 1024:  # 10MB limit
-        raise HTTPException(status_code=400, detail="File size too large (max 10MB)")
+    if file.size > 25 * 1024 * 1024:  # 25MB limit
+        raise HTTPException(status_code=400, detail="File size too large (max 25MB)")
     
     try:
         file_path = f"uploads/{file.filename}"
