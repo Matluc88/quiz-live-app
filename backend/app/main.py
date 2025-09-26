@@ -136,7 +136,43 @@ async def join_live_session(code: str, join_data: JoinSessionRequest, db: Sessio
                 "cognome": p.cognome
             } for p in participants
         ]
-    })
+    }, session_code=live_session.code)
+    
+    # If session is running, send current state to the new participant
+    if live_session.status == 'running':
+        print(f"Late joiner {participant.participant_id} joining running session {live_session.code}")
+        
+        served_questions = db.query(ServedQuestion).filter(
+            ServedQuestion.participant_id == participant.participant_id
+        ).all()
+        
+        if not served_questions and question_service.questions_db:
+            question = question_service.get_next_question(
+                level=progress.current_level,
+                topic=progress.topic,
+                served_hashes=[]
+            )
+            
+            if question:
+                print(f"Sending initial question to late joiner {participant.participant_id}")
+                question_hash = question_service.get_question_hash(question)
+                served_question = ServedQuestion(
+                    participant_id=participant.participant_id,
+                    question_hash=question_hash,
+                    question_data=question.dict()
+                )
+                db.add(served_question)
+                progress.total_served += 1
+                if not progress.topic:
+                    progress.topic = question.topic
+                db.commit()
+                
+                await manager.send_to_participant(str(participant.participant_id), {
+                    "type": "round.start",
+                    "question": question.dict(),
+                    "timer": 30,
+                    "question_number": progress.total_served
+                })
     
     return participant
 
@@ -242,7 +278,7 @@ async def pause_session(live_id: str, db: Session = Depends(get_db)):
     
     await manager.broadcast_to_session(live_id, {
         "type": "live.pause"
-    })
+    }, session_code=live_session.code)
     
     return {"status": "paused"}
 
@@ -258,7 +294,7 @@ async def resume_session(live_id: str, db: Session = Depends(get_db)):
     
     await manager.broadcast_to_session(live_id, {
         "type": "live.resume"
-    })
+    }, session_code=live_session.code)
     
     return {"status": "resumed"}
 
@@ -306,7 +342,7 @@ async def end_session(live_id: str, db: Session = Depends(get_db)):
     await manager.broadcast_to_session(live_id, {
         "type": "live.end",
         "report": report_data
-    })
+    }, session_code=live_session.code)
     
     return {"status": "ended", "report": report_data}
 
