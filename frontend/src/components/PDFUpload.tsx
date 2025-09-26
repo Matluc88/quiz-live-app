@@ -26,8 +26,8 @@ export const PDFUpload: React.FC = () => {
         setError('Solo file PDF sono supportati');
         return;
       }
-      if (selectedFile.size > 10 * 1024 * 1024) {
-        setError('File troppo grande (max 10MB)');
+      if (selectedFile.size > 25 * 1024 * 1024) {
+        setError('File troppo grande (max 25MB)');
         return;
       }
       setFile(selectedFile);
@@ -91,7 +91,7 @@ export const PDFUpload: React.FC = () => {
             disabled={uploading}
           />
           <p className="text-sm text-gray-500">
-            Formati supportati: PDF (max 10MB)
+            Formati supportati: PDF (max 25MB)
           </p>
         </div>
 
