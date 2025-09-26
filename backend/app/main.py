@@ -21,7 +21,12 @@ app = FastAPI(title="Quiz Live API", version="1.0.0")
 
 create_tables()
 
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai_api_key = os.getenv("OPENAI_API_KEY")
+if openai_api_key and openai_api_key != "your_openai_api_key_here":
+    openai_client = OpenAI(api_key=openai_api_key)
+else:
+    openai_client = None
+    print("Warning: OpenAI API key not configured. PDF upload functionality will be disabled.")
 
 os.makedirs("uploads", exist_ok=True)
 
@@ -521,6 +526,9 @@ Genera almeno 10 domande distribuite sui diversi livelli.
 Testo da analizzare:
 {pdf_text[:4000]}
 """
+        
+        if openai_client is None:
+            raise HTTPException(status_code=503, detail="OpenAI API not configured. PDF upload functionality is disabled.")
         
         response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
