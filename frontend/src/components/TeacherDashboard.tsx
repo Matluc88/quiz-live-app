@@ -66,7 +66,8 @@ export default function TeacherDashboard() {
   useEffect(() => {
     if (!liveId) return
 
-    const wsUrl = `ws://localhost:8000/ws/teacher/${liveId}`
+    const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000'
+    const wsUrl = `${WS_URL}/ws/teacher/${liveId}`
     const ws = new WebSocket(wsUrl)
 
     ws.onopen = () => {
