@@ -84,7 +84,10 @@ async def join_live_session(code: str, join_data: JoinSessionRequest, db: Sessio
     if live_session.status not in ['lobby', 'running']:
         raise HTTPException(status_code=400, detail="Session is not accepting participants")
     
+    websocket_participant_id = str(uuid.uuid4())
+    
     participant = Participant(
+        participant_id=websocket_participant_id,
         nome=join_data.nome,
         cognome=join_data.cognome,
         email=join_data.email,
