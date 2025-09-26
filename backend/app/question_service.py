@@ -18,48 +18,89 @@ class QuestionService:
         """Get available topics for a given level"""
         return list(self.questions_db.get(level, {}).keys())
     
-    def get_next_question(self, level: str, topic: Optional[str] = None, served_hashes: Optional[List[str]] = None) -> Optional[QuestionResponse]:
+    def get_next_question(self, level: str, topic: Optional[str] = None, served_hashes: Optional[List[str]] = None, live_id: Optional[str] = None, db_session=None) -> Optional[QuestionResponse]:
         """
         Generate next question based on level and topic, avoiding served questions
+        Checks session-specific questions first, then falls back to default database
+        Uses intelligent fallback strategy for topic selection
         """
         if served_hashes is None:
             served_hashes = []
+        
+        served_hashes_set = set(served_hashes)
+        
+        if live_id and db_session:
+            from app.models import SessionQuestion
+            session_questions = db_session.query(SessionQuestion).filter(
+                SessionQuestion.live_id == live_id,
+                SessionQuestion.level == level
+            ).all()
             
+            if session_questions:
+                if topic:
+                    topic_questions = [sq for sq in session_questions if sq.topic == topic]
+                else:
+                    topic_questions = session_questions
+                
+                available_questions = []
+                for sq in topic_questions:
+                    if sq.question_hash not in served_hashes_set:
+                        available_questions.append(sq.question_data)
+                
+                if available_questions:
+                    selected_question = random.choice(available_questions)
+                    return QuestionResponse(**selected_question)
+        
         level_questions = self.questions_db.get(level, {})
         if not level_questions:
             return None
-            
-        if not topic:
-            available_topics = list(level_questions.keys())
-            if not available_topics:
-                return None
-            topic = random.choice(available_topics)
         
-        topic_questions = level_questions.get(topic, [])
-        if not topic_questions:
+        if topic and topic in level_questions:
+            available_questions = self._get_available_questions_for_topic(
+                level_questions[topic], served_hashes_set
+            )
+            if available_questions:
+                return QuestionResponse(**random.choice(available_questions))
+        
+        # Intelligent fallback: prioritize topics with more available questions
+        topic_scores = []
+        for topic_name, questions in level_questions.items():
+            if topic_name == topic:  # Skip already tried topic
+                continue
+            available_count = len(self._get_available_questions_for_topic(questions, served_hashes_set))
+            if available_count > 0:
+                topic_scores.append((topic_name, available_count))
+        
+        if not topic_scores:
             return None
-            
+        
+        topic_scores.sort(key=lambda x: x[1], reverse=True)
+        
+        # Use weighted random selection favoring topics with more questions
+        if len(topic_scores) == 1:
+            selected_topic = topic_scores[0][0]
+        else:
+            top_topics = topic_scores[:3]
+            weights = [score for _, score in top_topics]
+            selected_topic = random.choices([name for name, _ in top_topics], weights=weights)[0]
+        
+        available_questions = self._get_available_questions_for_topic(
+            level_questions[selected_topic], served_hashes_set
+        )
+        
+        if available_questions:
+            return QuestionResponse(**random.choice(available_questions))
+        
+        return None
+    
+    def _get_available_questions_for_topic(self, topic_questions: List[Dict], served_hashes_set: set) -> List[Dict]:
+        """Helper method to get available questions for a topic"""
         available_questions = []
         for q in topic_questions:
             q_hash = self.generate_question_hash(q)
-            if q_hash not in served_hashes:
+            if q_hash not in served_hashes_set:
                 available_questions.append(q)
-        
-        if not available_questions:
-            for other_topic in level_questions.keys():
-                if other_topic != topic:
-                    other_questions = level_questions[other_topic]
-                    for q in other_questions:
-                        q_hash = self.generate_question_hash(q)
-                        if q_hash not in served_hashes:
-                            available_questions.append(q)
-            
-        if not available_questions:
-            return None
-            
-        selected_question = random.choice(available_questions)
-        
-        return QuestionResponse(**selected_question)
+        return available_questions
     
     def get_question_hash(self, question: QuestionResponse) -> str:
         """Get hash for a question response"""
