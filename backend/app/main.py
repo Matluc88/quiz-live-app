@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -12,7 +12,7 @@ from openai import OpenAI
 import json
 
 from app.database import get_db, create_tables
-from app.models import LiveSession, Participant, LiveParticipant, ParticipantProgress, ServedQuestion, LiveAnswer
+from app.models import LiveSession, Participant, LiveParticipant, ParticipantProgress, ServedQuestion, LiveAnswer, SessionQuestion
 from app.schemas import LiveSessionCreate, LiveSessionResponse, ParticipantCreate, ParticipantResponse, JoinSessionRequest, QuestionResponse, AnswerRequest, AnswerResponse, ParticipantStatus, PDFUploadResponse
 from app.question_service import question_service
 from app.websocket_manager import manager
@@ -38,6 +38,20 @@ app.add_middleware(
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )
+
+async def _send_question_to_new_participant(participant_id: str, question_data: dict, question_number: int):
+    """Send question to new participant with delay to ensure WebSocket is ready"""
+    await asyncio.sleep(1)
+    try:
+        await manager.send_to_participant(participant_id, {
+            "type": "round.start",
+            "question": question_data,
+            "timer": 30,
+            "question_number": question_number
+        })
+        print(f"Sent delayed question to new participant {participant_id}")
+    except Exception as e:
+        print(f"Failed to send delayed question to participant {participant_id}: {e}")
 
 def generate_session_code() -> str:
     """Generate a 6-digit session code"""
@@ -135,6 +149,44 @@ async def join_live_session(code: str, join_data: JoinSessionRequest, db: Sessio
         ]
     })
     
+    # If session is running, send question immediately to new participant
+    if live_session.status == 'running':
+        served = db.query(ServedQuestion).filter(
+            ServedQuestion.participant_id == participant.participant_id
+        ).all()
+        served_hashes = [sq.question_hash for sq in served]
+        
+        question = question_service.get_next_question(
+            level=progress.current_level,
+            topic=progress.topic,
+            served_hashes=served_hashes,
+            live_id=live_session.live_id,
+            db_session=db
+        )
+        
+        if question:
+            question_hash = question_service.get_question_hash(question)
+            served_question = ServedQuestion(
+                participant_id=participant.participant_id,
+                question_hash=question_hash,
+                question_data=question.dict()
+            )
+            db.add(served_question)
+            
+            progress.total_served += 1
+            if not progress.topic:
+                progress.topic = question.topic
+            
+            db.commit()
+            
+            question_data = question.dict()
+            question_data.pop('answer_index', None)
+            
+            import asyncio
+            asyncio.create_task(_send_question_to_new_participant(
+                str(participant.participant_id), question_data, progress.total_served
+            ))
+    
     return participant
 
 @app.post("/api/live/{live_id}/lock")
@@ -184,7 +236,9 @@ async def start_session(live_id: str, db: Session = Depends(get_db)):
             question = question_service.get_next_question(
                 level=progress.current_level,
                 topic=progress.topic,
-                served_hashes=served_hashes
+                served_hashes=served_hashes,
+                live_id=live_id,
+                db_session=db
             )
             
             if question:
@@ -205,12 +259,16 @@ async def start_session(live_id: str, db: Session = Depends(get_db)):
                 question_data = question.dict()
                 question_data.pop('answer_index', None)  # Remove correct answer
                 
-                await manager.send_to_participant(str(lp.participant_id), {
-                    "type": "round.start",
-                    "question": question_data,
-                    "timer": 30,
-                    "question_number": progress.total_served
-                })
+                try:
+                    await manager.send_to_participant(str(lp.participant_id), {
+                        "type": "round.start",
+                        "question": question_data,
+                        "timer": 30,
+                        "question_number": progress.total_served
+                    })
+                    print(f"Sent question to participant {lp.participant_id}")
+                except Exception as e:
+                    print(f"Failed to send question to participant {lp.participant_id}: {e}")
     
     return {"status": "started"}
 
@@ -320,7 +378,9 @@ async def get_next_question(participant_id: str, session_code: str, db: Session 
     question = question_service.get_next_question(
         level=progress.current_level,
         topic=progress.topic,
-        served_hashes=served_hashes
+        served_hashes=served_hashes,
+        live_id=live_session.live_id,
+        db_session=db
     )
     
     if not question:
@@ -481,13 +541,17 @@ async def websocket_teacher(websocket: WebSocket, live_id: str):
         manager.disconnect_teacher(live_id)
 
 @app.post("/api/upload-pdf", response_model=PDFUploadResponse)
-async def upload_pdf(file: UploadFile = File(...)):
+async def upload_pdf(file: UploadFile = File(...), live_id: str = Form(...), db: Session = Depends(get_db)):
     """Upload PDF and generate questions using OpenAI"""
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
     
     if file.size > 10 * 1024 * 1024:  # 10MB limit
         raise HTTPException(status_code=400, detail="File size too large (max 10MB)")
+    
+    live_session = db.query(LiveSession).filter(LiveSession.live_id == live_id).first()
+    if not live_session:
+        raise HTTPException(status_code=404, detail="Session not found")
     
     try:
         file_path = f"uploads/{file.filename}"
@@ -556,15 +620,21 @@ Testo da analizzare:
             level = question.get('level', 'base')
             topic = question.get('topic', 'Generale')
             
-            if level not in question_service.questions_db:
-                question_service.questions_db[level] = {}
+            question_hash = question_service.generate_question_hash(question)
             
-            if topic not in question_service.questions_db[level]:
-                question_service.questions_db[level][topic] = []
+            session_question = SessionQuestion(
+                live_id=live_session.live_id,
+                question_data=question,
+                question_hash=question_hash,
+                level=level,
+                topic=topic
+            )
             
-            question_service.questions_db[level][topic].append(question)
+            db.add(session_question)
             topics_added.add(topic)
             questions_added += 1
+        
+        db.commit()
         
         os.remove(file_path)
         

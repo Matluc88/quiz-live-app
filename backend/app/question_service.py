@@ -168,13 +168,36 @@ class QuestionService:
         """Get available topics for a given level"""
         return list(self.questions_db.get(level, {}).keys())
     
-    def get_next_question(self, level: str, topic: Optional[str] = None, served_hashes: Optional[List[str]] = None) -> Optional[QuestionResponse]:
+    def get_next_question(self, level: str, topic: Optional[str] = None, served_hashes: Optional[List[str]] = None, live_id: Optional[str] = None, db_session=None) -> Optional[QuestionResponse]:
         """
         Generate next question based on level and topic, avoiding served questions
+        Checks session-specific questions first, then falls back to default database
         """
         if served_hashes is None:
             served_hashes = []
+        
+        if live_id and db_session:
+            from app.models import SessionQuestion
+            session_questions = db_session.query(SessionQuestion).filter(
+                SessionQuestion.live_id == live_id,
+                SessionQuestion.level == level
+            ).all()
             
+            if session_questions:
+                if topic:
+                    topic_questions = [sq for sq in session_questions if sq.topic == topic]
+                else:
+                    topic_questions = session_questions
+                
+                available_questions = []
+                for sq in topic_questions:
+                    if sq.question_hash not in served_hashes:
+                        available_questions.append(sq.question_data)
+                
+                if available_questions:
+                    selected_question = random.choice(available_questions)
+                    return QuestionResponse(**selected_question)
+        
         level_questions = self.questions_db.get(level, {})
         if not level_questions:
             return None
@@ -208,7 +231,6 @@ class QuestionService:
             return None
             
         selected_question = random.choice(available_questions)
-        
         return QuestionResponse(**selected_question)
     
     def get_question_hash(self, question: QuestionResponse) -> str:
