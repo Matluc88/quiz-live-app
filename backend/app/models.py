@@ -82,3 +82,15 @@ class LiveAnswer(Base):
     
     live_session = relationship("LiveSession")
     participant = relationship("Participant")
+
+class SessionQuestion(Base):
+    __tablename__ = "session_questions"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    live_id = Column(String, ForeignKey('live_sessions.live_id'), nullable=False)
+    question_data = Column(JSON, nullable=False)
+    question_hash = Column(String, nullable=False)
+    level = Column(String, nullable=False)
+    topic = Column(String, nullable=False)
+    
+    live_session = relationship("LiveSession")
