@@ -160,6 +160,7 @@ async def start_session(live_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Session not found")
     
     if not question_service.questions_db:
+        print(f"No questions available in database: {question_service.questions_db}")
         raise HTTPException(
             status_code=400, 
             detail="No questions available. Please upload a PDF file first to generate questions."
@@ -177,8 +178,10 @@ async def start_session(live_id: str, db: Session = Depends(get_db)):
     await asyncio.sleep(5)
     
     participants = db.query(LiveParticipant).filter(LiveParticipant.live_id == live_id).all()
+    print(f"Found {len(participants)} participants to send questions to")
     
     for lp in participants:
+        print(f"Processing participant {lp.participant_id}")
         progress = db.query(ParticipantProgress).filter(
             ParticipantProgress.participant_id == lp.participant_id,
             ParticipantProgress.live_id == live_id
@@ -197,6 +200,7 @@ async def start_session(live_id: str, db: Session = Depends(get_db)):
             )
             
             if question:
+                print(f"Found question for participant {lp.participant_id}: {question.question[:50]}...")
                 question_hash = question_service.get_question_hash(question)
                 served_question = ServedQuestion(
                     participant_id=lp.participant_id,
@@ -220,6 +224,9 @@ async def start_session(live_id: str, db: Session = Depends(get_db)):
                     "timer": 30,
                     "question_number": progress.total_served
                 })
+                print(f"Sent question to participant {lp.participant_id}")
+            else:
+                print(f"No question found for participant {lp.participant_id} (level: {progress.current_level}, topic: {progress.topic})")
     
     return {"status": "started"}
 
