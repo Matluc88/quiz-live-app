@@ -84,16 +84,20 @@ export default function HomePage() {
           Quiz Live
         </h1>
         <p className="text-xl text-gray-600">
-          Sistema di quiz interattivo con domande adattive
+          Sistema di quiz interattivo con domande adattive e simulatori PEKIT
         </p>
       </div>
 
       <div className="max-w-2xl mx-auto">
         <Tabs defaultValue="student" className="w-full">
-          <TabsList className="grid w-full grid-cols-2">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="student" className="flex items-center gap-2">
               <GraduationCap className="w-4 h-4" />
               Corsista
+            </TabsTrigger>
+            <TabsTrigger value="simulator" className="flex items-center gap-2">
+              <Play className="w-4 h-4" />
+              Simulatori
             </TabsTrigger>
             <TabsTrigger value="teacher" className="flex items-center gap-2">
               <Users className="w-4 h-4" />
@@ -184,6 +188,66 @@ export default function HomePage() {
                     {loading ? 'Accesso in corso...' : 'Entra nella Sessione'}
                   </Button>
                 </form>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="simulator">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Play className="w-5 h-5" />
+                  Simulatori PEKIT
+                </CardTitle>
+                <CardDescription>
+                  Accedi ai simulatori interattivi per Windows 10, Word, Excel e PowerPoint
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <Button 
+                      onClick={() => navigate('/simulator/demo/demo-user')}
+                      className="h-20 flex flex-col items-center justify-center gap-2"
+                      variant="outline"
+                    >
+                      <span className="text-2xl">🖥️</span>
+                      <span>Windows 10</span>
+                    </Button>
+                    <Button 
+                      onClick={() => navigate('/simulator/demo/demo-user')}
+                      className="h-20 flex flex-col items-center justify-center gap-2"
+                      variant="outline"
+                    >
+                      <span className="text-2xl">📄</span>
+                      <span>Word</span>
+                    </Button>
+                    <Button 
+                      onClick={() => navigate('/simulator/demo/demo-user')}
+                      className="h-20 flex flex-col items-center justify-center gap-2"
+                      variant="outline"
+                    >
+                      <span className="text-2xl">📊</span>
+                      <span>Excel</span>
+                    </Button>
+                    <Button 
+                      onClick={() => navigate('/simulator/demo/demo-user')}
+                      className="h-20 flex flex-col items-center justify-center gap-2"
+                      variant="outline"
+                    >
+                      <span className="text-2xl">📽️</span>
+                      <span>PowerPoint</span>
+                    </Button>
+                  </div>
+                  
+                  <div className="bg-blue-50 p-4 rounded-lg">
+                    <h4 className="font-medium text-blue-900 mb-2">💡 Modalità Demo</h4>
+                    <p className="text-sm text-blue-700">
+                      Prova i simulatori in modalità demo per esplorare le funzionalità. 
+                      Per sessioni complete, unisciti a una sessione creata dal docente.
+                    </p>
+                  </div>
+                </div>
               </CardContent>
             </Card>
           </TabsContent>

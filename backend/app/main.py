@@ -1,7 +1,8 @@
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Dict
+from datetime import datetime
 import random
 import string
 import uuid
@@ -16,6 +17,17 @@ from app.models import LiveSession, Participant, LiveParticipant, ParticipantPro
 from app.schemas import LiveSessionCreate, LiveSessionResponse, ParticipantCreate, ParticipantResponse, JoinSessionRequest, QuestionResponse, AnswerRequest, AnswerResponse, ParticipantStatus, PDFUploadResponse
 from app.question_service import question_service
 from app.websocket_manager import manager
+from app.simulator_schemas import (
+    SimulatorExerciseCreate, SimulatorExerciseResponse, SimulatorStepResponse,
+    SimulatorSessionCreate, SimulatorSessionResponse, SimulatorActionRequest, 
+    SimulatorActionResponse, SimulatorProgressResponse, SimulatorHintRequest,
+    SimulatorHintResponse, SimulatorReportResponse
+)
+from app.simulator_models import (
+    SimulatorExercise, SimulatorStep, SimulatorSession, SimulatorProgress,
+    SimulatorAction, SimulatorHint
+)
+from app.simulator_service import simulator_service
 
 app = FastAPI(title="Quiz Live API", version="1.0.0")
 
@@ -651,3 +663,344 @@ Testo da analizzare:
         if os.path.exists(file_path):
             os.remove(file_path)
         raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")
+
+
+@app.post("/api/simulator/exercises", response_model=SimulatorExerciseResponse)
+async def create_simulator_exercise(exercise: SimulatorExerciseCreate, db: Session = Depends(get_db)):
+    """Create a new simulator exercise"""
+    try:
+        db_exercise = SimulatorExercise(**exercise.dict())
+        db.add(db_exercise)
+        db.commit()
+        db.refresh(db_exercise)
+        return db_exercise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/simulator/exercises", response_model=List[SimulatorExerciseResponse])
+async def list_simulator_exercises(simulator_type: Optional[str] = None, db: Session = Depends(get_db)):
+    """List all simulator exercises, optionally filtered by type"""
+    try:
+        query = db.query(SimulatorExercise)
+        if simulator_type:
+            query = query.filter(SimulatorExercise.simulator_type == simulator_type)
+        exercises = query.all()
+        return exercises
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/simulator/exercises/from-template")
+async def create_exercise_from_template(
+    simulator_type: str, 
+    exercise_name: str, 
+    db: Session = Depends(get_db)
+):
+    """Create an exercise from predefined template"""
+    try:
+        exercise_id = simulator_service.create_exercise_from_template(db, simulator_type, exercise_name)
+        if not exercise_id:
+            raise HTTPException(status_code=404, detail="Template not found")
+        return {"exercise_id": exercise_id, "message": "Exercise created from template"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/simulator/exercises/{exercise_id}/steps", response_model=List[SimulatorStepResponse])
+async def get_exercise_steps(exercise_id: str, db: Session = Depends(get_db)):
+    """Get all steps for an exercise"""
+    try:
+        steps = db.query(SimulatorStep).filter(
+            SimulatorStep.exercise_id == exercise_id
+        ).order_by(SimulatorStep.step_number).all()
+        return steps
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/simulator/sessions", response_model=SimulatorSessionResponse)
+async def create_simulator_session(session: SimulatorSessionCreate, db: Session = Depends(get_db)):
+    """Create a new simulator session"""
+    try:
+        live_session = db.query(LiveSession).filter(LiveSession.live_id == session.live_id).first()
+        if not live_session:
+            raise HTTPException(status_code=404, detail="Live session not found")
+        
+        exercise = db.query(SimulatorExercise).filter(SimulatorExercise.exercise_id == session.exercise_id).first()
+        if not exercise:
+            raise HTTPException(status_code=404, detail="Exercise not found")
+        
+        db_session = SimulatorSession(**session.dict())
+        db.add(db_session)
+        db.commit()
+        db.refresh(db_session)
+        return db_session
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/simulator/sessions/{session_id}", response_model=SimulatorSessionResponse)
+async def get_simulator_session(session_id: str, db: Session = Depends(get_db)):
+    """Get simulator session details"""
+    try:
+        session = db.query(SimulatorSession).filter(SimulatorSession.session_id == session_id).first()
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        return session
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/simulator/sessions/{session_id}/join")
+async def join_simulator_session(session_id: str, participant_id: str, db: Session = Depends(get_db)):
+    """Join a participant to a simulator session"""
+    try:
+        session = db.query(SimulatorSession).filter(SimulatorSession.session_id == session_id).first()
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        participant = db.query(Participant).filter(Participant.participant_id == participant_id).first()
+        if not participant:
+            raise HTTPException(status_code=404, detail="Participant not found")
+        
+        progress = db.query(SimulatorProgress).filter(
+            SimulatorProgress.session_id == session_id,
+            SimulatorProgress.participant_id == participant_id
+        ).first()
+        
+        if not progress:
+            exercise = db.query(SimulatorExercise).filter(SimulatorExercise.exercise_id == session.exercise_id).first()
+            steps = db.query(SimulatorStep).filter(SimulatorStep.exercise_id == session.exercise_id).all()
+            max_score = sum(step.points for step in steps)
+            
+            progress = SimulatorProgress(
+                participant_id=participant_id,
+                session_id=session_id,
+                max_possible_score=max_score,
+                start_time=datetime.utcnow()
+            )
+            db.add(progress)
+            db.commit()
+        
+        return {"message": "Joined simulator session successfully", "progress": progress}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/simulator/actions", response_model=SimulatorActionResponse)
+async def record_simulator_action(action: SimulatorActionRequest, db: Session = Depends(get_db)):
+    """Record and evaluate a simulator action"""
+    try:
+        progress = db.query(SimulatorProgress).filter(
+            SimulatorProgress.session_id == action.session_id,
+            SimulatorProgress.participant_id == action.participant_id
+        ).first()
+        
+        if not progress:
+            raise HTTPException(status_code=404, detail="Progress not found")
+        
+        session = db.query(SimulatorSession).filter(SimulatorSession.session_id == action.session_id).first()
+        current_step = db.query(SimulatorStep).filter(
+            SimulatorStep.exercise_id == session.exercise_id,
+            SimulatorStep.step_number == progress.current_step
+        ).first()
+        
+        # Validate action
+        is_correct = False
+        score_delta = 0
+        feedback = "Action recorded"
+        
+        if current_step:
+            is_correct, score_delta, feedback = simulator_service.validate_action(
+                db, action.dict(), current_step
+            )
+        
+        db_action = SimulatorAction(
+            participant_id=action.participant_id,
+            session_id=action.session_id,
+            step_id=current_step.step_id if current_step else None,
+            action_type=action.action_type,
+            target_element=action.target_element,
+            coordinates=action.coordinates,
+            input_value=action.input_value,
+            is_correct=is_correct,
+            score_delta=score_delta,
+            latency_ms=action.latency_ms,
+            action_metadata=action.action_metadata
+        )
+        db.add(db_action)
+        
+        if is_correct and current_step:
+            progress.total_score += score_delta
+            progress.completed_steps = progress.completed_steps or []
+            if current_step.step_id not in progress.completed_steps:
+                progress.completed_steps.append(current_step.step_id)
+            progress.current_step += 1
+        
+        db.commit()
+        
+        next_step = simulator_service.get_next_step(db, action.session_id, action.participant_id)
+        exercise_completed = next_step is None
+        
+        if exercise_completed:
+            progress.status = "completed"
+            progress.end_time = datetime.utcnow()
+            db.commit()
+        
+        return SimulatorActionResponse(
+            action_id=db_action.action_id,
+            is_correct=is_correct,
+            score_delta=score_delta,
+            feedback_message=feedback,
+            next_step=next_step,
+            exercise_completed=exercise_completed,
+            total_score=progress.total_score,
+            hints_available=True
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/simulator/progress/{session_id}/{participant_id}", response_model=SimulatorProgressResponse)
+async def get_simulator_progress(session_id: str, participant_id: str, db: Session = Depends(get_db)):
+    """Get participant progress in simulator session"""
+    try:
+        progress = db.query(SimulatorProgress).filter(
+            SimulatorProgress.session_id == session_id,
+            SimulatorProgress.participant_id == participant_id
+        ).first()
+        
+        if not progress:
+            raise HTTPException(status_code=404, detail="Progress not found")
+        
+        completion_percentage = 0
+        if progress.max_possible_score > 0:
+            completion_percentage = (progress.total_score / progress.max_possible_score) * 100
+        
+        return SimulatorProgressResponse(
+            participant_id=progress.participant_id,
+            session_id=progress.session_id,
+            current_step=progress.current_step,
+            completed_steps=progress.completed_steps or [],
+            total_score=progress.total_score,
+            max_possible_score=progress.max_possible_score,
+            hints_used=progress.hints_used,
+            attempts_count=progress.attempts_count,
+            status=progress.status,
+            completion_percentage=completion_percentage
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/simulator/hints", response_model=SimulatorHintResponse)
+async def request_simulator_hint(hint_request: SimulatorHintRequest, db: Session = Depends(get_db)):
+    """Request a hint for current step"""
+    try:
+        step = db.query(SimulatorStep).filter(SimulatorStep.step_id == hint_request.step_id).first()
+        if not step:
+            raise HTTPException(status_code=404, detail="Step not found")
+        
+        penalty = simulator_service.apply_hint_penalty(hint_request.hint_level)
+        
+        hint = SimulatorHint(
+            participant_id=hint_request.participant_id,
+            step_id=hint_request.step_id,
+            hint_level=hint_request.hint_level,
+            penalty_applied=penalty
+        )
+        db.add(hint)
+        
+        progress = db.query(SimulatorProgress).filter(
+            SimulatorProgress.participant_id == hint_request.participant_id
+        ).first()
+        if progress:
+            progress.hints_used += 1
+            progress.total_score = max(0, progress.total_score - penalty)
+        
+        db.commit()
+        
+        hint_response = SimulatorHintResponse(
+            penalty_applied=penalty,
+            remaining_hints=3 - progress.hints_used if progress else 3
+        )
+        
+        if hint_request.hint_level >= 1:
+            hint_response.hint_text = step.hint_text
+        if hint_request.hint_level >= 2:
+            hint_response.highlight_selector = step.hint_highlight_selector
+        if hint_request.hint_level >= 3:
+            hint_response.animation_path = step.hint_animation_path
+        
+        return hint_response
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/simulator/report/{session_id}/{participant_id}", response_model=SimulatorReportResponse)
+async def get_simulator_report(session_id: str, participant_id: str, db: Session = Depends(get_db)):
+    """Generate comprehensive report for participant's simulator session"""
+    try:
+        progress = db.query(SimulatorProgress).filter(
+            SimulatorProgress.session_id == session_id,
+            SimulatorProgress.participant_id == participant_id
+        ).first()
+        
+        if not progress:
+            raise HTTPException(status_code=404, detail="Progress not found")
+        
+        participant = db.query(Participant).filter(Participant.participant_id == participant_id).first()
+        session = db.query(SimulatorSession).filter(SimulatorSession.session_id == session_id).first()
+        exercise = db.query(SimulatorExercise).filter(SimulatorExercise.exercise_id == session.exercise_id).first()
+        
+        actions = db.query(SimulatorAction).filter(
+            SimulatorAction.session_id == session_id,
+            SimulatorAction.participant_id == participant_id
+        ).order_by(SimulatorAction.timestamp).all()
+        
+        time_taken = 0
+        if progress.start_time and progress.end_time:
+            time_taken = int((progress.end_time - progress.start_time).total_seconds())
+        
+        steps = db.query(SimulatorStep).filter(SimulatorStep.exercise_id == exercise.exercise_id).all()
+        step_breakdown = []
+        for step in steps:
+            step_actions = [a for a in actions if a.step_id == step.step_id]
+            step_breakdown.append({
+                "step_number": step.step_number,
+                "title": step.title,
+                "completed": step.step_id in (progress.completed_steps or []),
+                "attempts": len(step_actions),
+                "score_earned": sum(a.score_delta for a in step_actions if a.score_delta > 0),
+                "max_score": step.points
+            })
+        
+        action_replay = []
+        for action in actions:
+            action_replay.append({
+                "timestamp": action.timestamp.isoformat(),
+                "action_type": action.action_type,
+                "target_element": action.target_element,
+                "coordinates": action.coordinates,
+                "input_value": action.input_value,
+                "is_correct": action.is_correct,
+                "score_delta": action.score_delta,
+                "latency_ms": action.latency_ms
+            })
+        
+        completion_percentage = 0
+        if progress.max_possible_score > 0:
+            completion_percentage = (progress.total_score / progress.max_possible_score) * 100
+        
+        return SimulatorReportResponse(
+            participant_id=participant_id,
+            participant_name=f"{participant.nome} {participant.cognome}",
+            exercise_title=exercise.title,
+            mode=session.mode,
+            total_score=progress.total_score,
+            max_possible_score=progress.max_possible_score,
+            completion_percentage=completion_percentage,
+            time_taken_seconds=time_taken,
+            hints_used=progress.hints_used,
+            attempts_count=progress.attempts_count,
+            status=progress.status,
+            step_breakdown=step_breakdown,
+            action_replay=action_replay
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

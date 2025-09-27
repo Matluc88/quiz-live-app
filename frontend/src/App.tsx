@@ -3,6 +3,7 @@ import HomePage from './components/HomePage'
 import StudentLobby from './components/StudentLobby'
 import QuizSession from './components/QuizSession'
 import TeacherDashboard from './components/TeacherDashboard'
+import { SimulatorPage } from './components/SimulatorPage'
 import './App.css'
 
 function App() {
@@ -13,6 +14,7 @@ function App() {
           <Route path="/" element={<HomePage />} />
           <Route path="/student/:code" element={<StudentLobby />} />
           <Route path="/quiz/:code/:participantId" element={<QuizSession />} />
+          <Route path="/simulator/:liveId/:participantId" element={<SimulatorPage />} />
           <Route path="/teacher/:liveId" element={<TeacherDashboard />} />
         </Routes>
       </div>
