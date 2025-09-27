@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -12,7 +12,7 @@ from openai import OpenAI
 import json
 
 from app.database import get_db, create_tables
-from app.models import LiveSession, Participant, LiveParticipant, ParticipantProgress, ServedQuestion, LiveAnswer
+from app.models import LiveSession, Participant, LiveParticipant, ParticipantProgress, ServedQuestion, LiveAnswer, SessionQuestion
 from app.schemas import LiveSessionCreate, LiveSessionResponse, ParticipantCreate, ParticipantResponse, JoinSessionRequest, QuestionResponse, AnswerRequest, AnswerResponse, ParticipantStatus, PDFUploadResponse
 from app.question_service import question_service
 from app.websocket_manager import manager
@@ -224,15 +224,16 @@ async def start_session(live_id: str, db: Session = Depends(get_db)):
         ).first()
         
         if progress and progress.total_served < 50:
-            served = db.query(ServedQuestion).filter(
+            served_hashes = [row[0] for row in db.query(ServedQuestion.question_hash).filter(
                 ServedQuestion.participant_id == lp.participant_id
-            ).all()
-            served_hashes = [sq.question_hash for sq in served]
+            ).all()]
             
             question = question_service.get_next_question(
                 level=progress.current_level,
                 topic=progress.topic,
-                served_hashes=served_hashes
+                served_hashes=served_hashes,
+                live_id=live_session.live_id,
+                db_session=db
             )
             
             if question:
@@ -364,15 +365,16 @@ async def get_next_question(participant_id: str, session_code: str, db: Session 
     if progress.total_served >= 50:
         raise HTTPException(status_code=400, detail="Maximum questions reached")
     
-    served = db.query(ServedQuestion).filter(
+    served_hashes = [row[0] for row in db.query(ServedQuestion.question_hash).filter(
         ServedQuestion.participant_id == participant_id
-    ).all()
-    served_hashes = [sq.question_hash for sq in served]
+    ).all()]
     
     question = question_service.get_next_question(
         level=progress.current_level,
         topic=progress.topic,
-        served_hashes=served_hashes
+        served_hashes=served_hashes,
+        live_id=live_session.live_id,
+        db_session=db
     )
     
     if not question:
@@ -533,13 +535,17 @@ async def websocket_teacher(websocket: WebSocket, live_id: str):
         manager.disconnect_teacher(live_id)
 
 @app.post("/api/upload-pdf", response_model=PDFUploadResponse)
-async def upload_pdf(file: UploadFile = File(...)):
+async def upload_pdf(file: UploadFile = File(...), live_id: str = Form(...), db: Session = Depends(get_db)):
     """Upload PDF and generate questions using OpenAI"""
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
     
     if file.size > 25 * 1024 * 1024:  # 25MB limit
         raise HTTPException(status_code=400, detail="File size too large (max 25MB)")
+    
+    live_session = db.query(LiveSession).filter(LiveSession.live_id == live_id).first()
+    if not live_session:
+        raise HTTPException(status_code=404, detail="Session not found")
     
     try:
         file_path = f"uploads/{file.filename}"
@@ -576,7 +582,7 @@ Formato richiesto per ogni domanda:
 Genera almeno 10 domande distribuite sui diversi livelli.
 
 Testo da analizzare:
-{pdf_text[:4000]}
+{pdf_text[:16000]}
 """
         
         if openai_client is None:
@@ -594,12 +600,52 @@ Testo da analizzare:
         questions_text = response.choices[0].message.content
         
         import re
-        json_match = re.search(r'\[.*\]', questions_text, re.DOTALL)
-        if json_match:
-            questions_json = json_match.group()
-            questions = json.loads(questions_json)
-        else:
+        import logging
+        
+        questions = []
+        try:
             questions = json.loads(questions_text)
+        except json.JSONDecodeError:
+            try:
+                json_match = re.search(r'\[.*\]', questions_text, re.DOTALL)
+                if json_match:
+                    questions_json = json_match.group()
+                    questions = json.loads(questions_json)
+                else:
+                    json_objects = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', questions_text, re.DOTALL)
+                    questions = []
+                    for obj_str in json_objects:
+                        try:
+                            questions.append(json.loads(obj_str))
+                        except json.JSONDecodeError:
+                            continue
+            except json.JSONDecodeError:
+                logging.error(f"Failed to parse OpenAI response: {questions_text[:500]}...")
+                raise HTTPException(status_code=500, detail="Error parsing OpenAI response - invalid JSON format")
+        
+        # Validate parsed questions
+        if not questions or not isinstance(questions, list):
+            raise HTTPException(status_code=500, detail="OpenAI response did not contain valid question array")
+        
+        # Validate each question has required fields
+        valid_questions = []
+        required_fields = ['topic', 'level', 'question', 'options', 'answer_index']
+        for i, question in enumerate(questions):
+            if not isinstance(question, dict):
+                continue
+            if all(field in question for field in required_fields):
+                if isinstance(question.get('answer_index'), int) and 0 <= question['answer_index'] < len(question.get('options', [])):
+                    valid_questions.append(question)
+                else:
+                    logging.warning(f"Question {i} has invalid answer_index: {question.get('answer_index')}")
+            else:
+                missing_fields = [field for field in required_fields if field not in question]
+                logging.warning(f"Question {i} missing required fields: {missing_fields}")
+        
+        if not valid_questions:
+            raise HTTPException(status_code=500, detail="No valid questions could be extracted from OpenAI response")
+        
+        questions = valid_questions
         
         topics_added = set()
         questions_added = 0
@@ -608,13 +654,17 @@ Testo da analizzare:
             level = question.get('level', 'base')
             topic = question.get('topic', 'Generale')
             
-            if level not in question_service.questions_db:
-                question_service.questions_db[level] = {}
+            question_hash = question_service.generate_question_hash(question)
             
-            if topic not in question_service.questions_db[level]:
-                question_service.questions_db[level][topic] = []
+            session_question = SessionQuestion(
+                live_id=live_session.live_id,
+                question_data=question,
+                question_hash=question_hash,
+                level=level,
+                topic=topic
+            )
             
-            question_service.questions_db[level][topic].append(question)
+            db.add(session_question)
             topics_added.add(topic)
             questions_added += 1
         
